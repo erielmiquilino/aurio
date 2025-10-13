@@ -25,7 +25,20 @@ export async function listVoices(credentials: AzureCredentials): Promise<VoiceIn
 
 export function buildSsml(text: string, voiceName: string, rate: string, pitch: string): string {
   const escape = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const safeText = escape(text);
+  
+  // Adicionar marcadores temporários para pausas (serão substituídos após escape)
+  let processedText = text;
+  // Adicionar pausa média (300ms) após ponto final, exclamação, interrogação
+  processedText = processedText.replace(/([.!?])\s+/g, '$1__BREAK_MEDIUM__ ');
+  // Adicionar pausa curta (200ms) após vírgula, ponto e vírgula, dois pontos
+  processedText = processedText.replace(/([,;:])\s+/g, '$1__BREAK_SHORT__ ');
+  
+  // Escapar o texto
+  const safeText = escape(processedText)
+    // Substituir marcadores por tags SSML reais
+    .replace(/__BREAK_MEDIUM__/g, '<break time="300ms"/>')
+    .replace(/__BREAK_SHORT__/g, '<break time="200ms"/>');
+  
   const localeMatch = voiceName.match(/^[a-z]{2}-[A-Z]{2}/);
   const locale = localeMatch ? localeMatch[0] : 'en-US';
   const normalizedPitch = (() => {
