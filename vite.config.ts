@@ -23,6 +23,15 @@ export default defineConfig(({ mode }) => {
           } catch (_) {
             // ignore
           }
+          // Copiar pdf.worker
+          const pdfWorkerSrc = resolve(rootDir, 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs');
+          const pdfWorkerDst = resolve(rootDir, 'dist/pdf.worker.min.mjs');
+          try {
+            await copyFile(pdfWorkerSrc, pdfWorkerDst);
+            console.log('✓ pdf.worker.min.mjs copiado');
+          } catch (e) {
+            console.error('✗ Falha ao copiar pdf.worker.min.mjs', e);
+          }
         }
       }
     ],
@@ -33,12 +42,14 @@ export default defineConfig(({ mode }) => {
       sourcemap: isDev ? true : false,
       minify: isDev ? false : 'esbuild',
       rollupOptions: {
-        input: {
-          background: resolve(rootDir, 'src/background/serviceWorker.ts'),
-          content: resolve(rootDir, 'src/content/index.ts'),
-          popup: resolve(rootDir, 'src/popup/index.html'),
-          options: resolve(rootDir, 'src/options/index.html')
-        },
+      input: {
+        background: resolve(rootDir, 'src/background/serviceWorker.ts'),
+        content: resolve(rootDir, 'src/content/index.ts'),
+        popup: resolve(rootDir, 'src/popup/index.html'),
+        options: resolve(rootDir, 'src/options/index.html'),
+        offscreen: resolve(rootDir, 'src/offscreen/index.html'),
+        styles: resolve(rootDir, 'src/styles/global.css')
+      },
         output: {
           entryFileNames: (chunk) => {
             if (chunk.name === 'background') return 'background.js';

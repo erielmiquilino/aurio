@@ -8,14 +8,20 @@ function Options() {
   const [rate, setRate] = useState('0%');
   const [pitch, setPitch] = useState('+0Hz');
   const [saved, setSaved] = useState(false);
+  const [totalChars, setTotalChars] = useState(0);
+  const [cacheSize, setCacheSize] = useState(0);
 
   useEffect(() => {
-    chrome.storage.local.get(['azureRegion', 'azureKey', 'defaultVoice', 'defaultRate', 'defaultPitch'], (res) => {
+    chrome.storage.local.get(['azureRegion', 'azureKey', 'defaultVoice', 'defaultRate', 'defaultPitch', 'totalChars'], (res) => {
       if (res.azureRegion) setRegion(res.azureRegion);
       if (res.azureKey) setKey(res.azureKey);
       if (res.defaultVoice) setVoice(res.defaultVoice);
       if (res.defaultRate) setRate(res.defaultRate);
       if (res.defaultPitch) setPitch(res.defaultPitch);
+      setTotalChars(res.totalChars || 0);
+    });
+    chrome.runtime.sendMessage({ type: 'GET_CACHE_SIZE' }, (response) => {
+      if (response?.size != null) setCacheSize(response.size);
     });
   }, []);
 
@@ -27,6 +33,22 @@ function Options() {
       defaultRate: rate,
       defaultPitch: pitch
     }, () => {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    });
+  }
+
+  function resetCounter() {
+    chrome.runtime.sendMessage({ type: 'RESET_TOTAL_CHARS' }, () => {
+      setTotalChars(0);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    });
+  }
+
+  function clearCache() {
+    chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' }, () => {
+      setCacheSize(0);
       setSaved(true);
       setTimeout(() => setSaved(false), 1500);
     });
@@ -61,6 +83,17 @@ function Options() {
         <button onClick={save}>Salvar</button>
         {saved && <span style={{ marginLeft: 8, color: 'green' }}>Salvo!</span>}
       </div>
+      <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid #ddd' }} />
+      <h3>Contador de caracteres</h3>
+      <p style={{ color: '#666' }}>Total acumulado: <strong>{totalChars.toLocaleString()}</strong> caracteres sintetizados</p>
+      <button onClick={resetCounter} style={{ marginTop: 8 }}>Resetar contador</button>
+      <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid #ddd' }} />
+      <h3>Cache de áudio</h3>
+      <p style={{ color: '#666' }}>Tamanho atual: <strong>{(cacheSize / 1024 / 1024).toFixed(2)} MB</strong></p>
+      <button onClick={clearCache} style={{ marginTop: 8 }}>
+        <span className="material-icons" style={{ fontSize: 16, marginRight: 4 }}>delete</span>
+        Limpar cache
+      </button>
     </div>
   );
 }

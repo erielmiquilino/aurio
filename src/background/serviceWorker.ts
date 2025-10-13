@@ -1,6 +1,7 @@
 import { buildSsml, listVoices, synthesize, AzureCredentials } from '../lib/azureTts';
 import type { Messages, TtsRequest, GetVoices, TtsStop, TtsPause, TtsResume, ReadPdf, PdfData } from '../lib/messaging';
 import { chunkByLength, splitIntoParagraphs } from '../lib/chunkText';
+import * as audioCache from '../lib/audioCache';
 
 type QueueItem = {
   paragraphIndex: number;
@@ -18,6 +19,23 @@ type TabQueue = {
 };
 
 const tabIdToQueue = new Map<number, TabQueue>();
+
+// Contador de caracteres
+let sessionChars = 0;
+
+async function incrementCharCount(chars: number) {
+  sessionChars += chars;
+  const result = await chrome.storage.local.get(['totalChars']);
+  const totalChars = (result.totalChars || 0) + chars;
+  await chrome.storage.local.set({ totalChars });
+  console.log('[TTS][bg] chars sintetizados', { added: chars, session: sessionChars, total: totalChars });
+}
+
+function updateBadge(tabId: number, state: 'playing' | 'paused' | 'stopped') {
+  const badges = { playing: '🔊', paused: '⏸️', stopped: '' };
+  chrome.action.setBadgeText({ text: badges[state], tabId });
+  console.log('[TTS][bg] badge atualizado', { tabId, state, icon: badges[state] });
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: 'speak-selection', title: 'Ler seleção', contexts: ['selection'] });
@@ -130,6 +148,7 @@ async function produceAudioForTab(tabId: number) {
     return;
   }
   queue.playing = true;
+  updateBadge(tabId, 'playing');
   for (let i = 0; i < queue.items.length; i++) {
     if (!queue.playing) break;
     const item = queue.items[i];
@@ -141,9 +160,22 @@ async function produceAudioForTab(tabId: number) {
       if (!queue.playing) break;
       const ssml = buildSsml(item.chunks[j], queue.voiceName, queue.rate, queue.pitch);
       try {
-        console.log('[TTS][bg] sintetizando', { tabId, paragraph: i, chunk: j, voice: queue.voiceName, textLen: item.chunks[j].length });
-        const { data, contentType } = await synthesize(creds, ssml);
-        console.log('[TTS][bg] áudio sintetizado OK', { tabId, paragraph: i, chunk: j, audioSize: data.byteLength, contentType });
+        // Tentar buscar no cache primeiro
+        const cachedAudio = await audioCache.get(item.chunks[j], queue.voiceName);
+        let data: ArrayBuffer;
+        
+        if (cachedAudio) {
+          data = cachedAudio;
+          console.log('[TTS][bg] usando áudio do cache', { tabId, paragraph: i, chunk: j, audioSize: data.byteLength });
+        } else {
+          console.log('[TTS][bg] sintetizando', { tabId, paragraph: i, chunk: j, voice: queue.voiceName, textLen: item.chunks[j].length });
+          const result = await synthesize(creds, ssml);
+          data = result.data;
+          console.log('[TTS][bg] áudio sintetizado OK', { tabId, paragraph: i, chunk: j, audioSize: data.byteLength, contentType: result.contentType });
+          await incrementCharCount(item.chunks[j].length);
+          // Salvar no cache
+          await audioCache.set(item.chunks[j], queue.voiceName, data);
+        }
         // Converter ArrayBuffer para Array de bytes para serialização via Chrome messaging
         const audioArray = Array.from(new Uint8Array(data));
         try {
@@ -174,6 +206,7 @@ async function produceAudioForTab(tabId: number) {
     });
   }
   queue.playing = false;
+  updateBadge(tabId, 'stopped');
 }
 
 function handleTtsRequest(msg: TtsRequest, sender: chrome.runtime.MessageSender) {
@@ -208,23 +241,32 @@ function handleTtsRequest(msg: TtsRequest, sender: chrome.runtime.MessageSender)
 
 function handleStop(msg: TtsStop) {
   const q = tabIdToQueue.get(msg.tabId);
-  if (q) q.playing = false;
+  if (q) {
+    q.playing = false;
+    updateBadge(msg.tabId, 'stopped');
+  }
   console.log('[TTS][bg] stop', msg.tabId);
 }
 
 function handlePause(msg: TtsPause) {
   const q = tabIdToQueue.get(msg.tabId);
-  if (q) q.paused = true;
+  if (q) {
+    q.paused = true;
+    updateBadge(msg.tabId, 'paused');
+  }
   console.log('[TTS][bg] pause', msg.tabId);
 }
 
 function handleResume(msg: TtsResume) {
   const q = tabIdToQueue.get(msg.tabId);
-  if (q) q.paused = false;
+  if (q) {
+    q.paused = false;
+    updateBadge(msg.tabId, 'playing');
+  }
   console.log('[TTS][bg] resume', msg.tabId);
 }
 
-chrome.runtime.onMessage.addListener((message: Messages, sender) => {
+chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
   switch (message.type) {
     case 'GET_VOICES':
       handleGetVoices(message as GetVoices, sender);
@@ -244,6 +286,33 @@ chrome.runtime.onMessage.addListener((message: Messages, sender) => {
     case 'READ_PDF':
       handleReadPdf(message as ReadPdf, sender);
       break;
+    case 'GET_SESSION_CHARS':
+      sendResponse({ sessionChars });
+      return true;
+    case 'GET_TOTAL_CHARS':
+      chrome.storage.local.get('totalChars', (res) => {
+        sendResponse({ totalChars: res.totalChars ?? 0 });
+      });
+      return true;
+    case 'RESET_TOTAL_CHARS':
+      chrome.storage.local.set({ totalChars: 0 }, () => {
+        sendResponse({ success: true });
+      });
+      return true;
+    case 'GET_CACHE_SIZE':
+      (async () => {
+        const size = await audioCache.getSize();
+        console.log('[TTS][bg] tamanho do cache', { bytes: size, mb: (size / 1024 / 1024).toFixed(2) });
+        sendResponse({ size });
+      })();
+      return true;
+    case 'CLEAR_CACHE':
+      (async () => {
+        await audioCache.clear();
+        console.log('[TTS][bg] cache limpo');
+        sendResponse({ success: true });
+      })();
+      return true;
     default:
       break;
   }
@@ -257,17 +326,49 @@ async function handleReadPdf(msg: ReadPdf, sender: chrome.runtime.MessageSender)
     const tab = sender.tab!;
     const url = tab.url;
     if (!url) throw new Error('Sem URL da aba.');
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Falha ao buscar PDF: ${res.status}`);
-    const buffer = await res.arrayBuffer();
-    chrome.tabs.sendMessage(tabId, {
-      type: 'PDF_DATA',
-      buffer,
-      voiceName: msg.voiceName,
-      rate: msg.rate,
-      pitch: msg.pitch
-    } as PdfData);
+    
+    console.log('[TTS][bg] criando offscreen document para PDF', { url });
+    
+    // Criar offscreen document se não existir
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT' as any]
+    });
+    
+    if (existingContexts.length === 0) {
+      await chrome.offscreen.createDocument({
+        url: 'src/offscreen/index.html',
+        reasons: ['WORKERS' as any],
+        justification: 'Processar PDF com pdf.js worker'
+      });
+      console.log('[TTS][bg] offscreen document criado');
+    }
+    
+    // Enviar mensagem para o offscreen document extrair o PDF
+    const response: any = await chrome.runtime.sendMessage({
+      type: 'PDF_EXTRACT_REQUEST',
+      url
+    });
+    
+    if (response?.success && response.text) {
+      console.log('[TTS][bg] PDF extraído via offscreen', { textLen: response.text.length });
+      
+      // Criar TTS request com o texto extraído
+      const req: TtsRequest = {
+        type: 'TTS_REQUEST',
+        tabId,
+        requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        textBlocks: [response.text],
+        voiceName: msg.voiceName,
+        rate: msg.rate,
+        pitch: msg.pitch
+      };
+      
+      await handleTtsRequest(req, sender);
+    } else {
+      throw new Error(response?.error || 'Falha ao extrair PDF');
+    }
   } catch (e) {
+    console.error('[TTS][bg] erro ao processar PDF', e);
     if (sender.tab?.id) chrome.tabs.sendMessage(sender.tab.id, { type: 'TTS_ERROR', message: String(e) });
   }
 }

@@ -10,7 +10,8 @@
     "scripting",
     "storage",
     "tabs",
-    "contextMenus"
+    "contextMenus",
+    "offscreen"
   ],
   "host_permissions": [
     "https://*.tts.speech.microsoft.com/*",
@@ -28,11 +29,15 @@
       "resources": [
         "chunks/*",
         "**/*.mjs",
-        "**/*.js"
+        "**/*.js",
+        "pdf.worker.min.mjs"
       ],
       "matches": ["<all_urls>"]
     }
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; object-src 'self'"
+  },
   "options_ui": {
     "page": "src/options/index.html",
     "open_in_tab": true

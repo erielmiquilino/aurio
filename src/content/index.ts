@@ -1,4 +1,5 @@
 import type { TtsAudioChunk, TtsRequest } from '../lib/messaging';
+import { extractText } from '../lib/readability';
 
 let audioEl: HTMLAudioElement | null = null;
 let sourceUrl: string | null = null;
@@ -114,9 +115,9 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
     console.error('[TTS_ERROR]', message.message);
   }
   if (message.type === 'CONTENT_SPEAK') {
-    const { voiceName, rate, pitch } = message;
-    console.log('[TTS][content] CONTENT_SPEAK recebido', { voiceName, rate, pitch });
-    requestSpeak(voiceName, rate, pitch);
+    const { voiceName, rate, pitch, useReadability } = message;
+    console.log('[TTS][content] CONTENT_SPEAK recebido', { voiceName, rate, pitch, useReadability });
+    requestSpeak(voiceName, rate, pitch, useReadability);
   }
   if (message.type === 'CONTENT_STOP') {
     stopSpeak();
@@ -134,9 +135,19 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
 });
 
 // Exposed helpers used by popup via scripting.executeScript
-export function requestSpeak(voiceName: string, rate: string, pitch: string) {
-  const text = extractSelectedOrAllText();
-  console.log('[TTS][content] requestSpeak', { len: text.length, voiceName, rate, pitch });
+export function requestSpeak(voiceName: string, rate: string, pitch: string, useReadability = false) {
+  let text: string;
+  const selection = window.getSelection()?.toString() || '';
+  
+  if (selection) {
+    // Se há seleção, usar o texto selecionado
+    text = selection;
+  } else {
+    // Se não há seleção, usar extração de texto (com ou sem Readability)
+    text = extractText(useReadability);
+  }
+  
+  console.log('[TTS][content] requestSpeak', { len: text.length, voiceName, rate, pitch, useReadability, hasSelection: !!selection });
   const req: TtsRequest = {
     type: 'TTS_REQUEST',
     tabId: (window as any).chrome?.devtools ? -1 : (window as any).chrome?.tabs ? (window as any).chrome.tabs.TAB_ID_NONE : -1,

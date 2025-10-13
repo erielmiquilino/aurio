@@ -1,0 +1,131 @@
+/* Variáveis de tema */
+:root {
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --border-color: #dddddd;
+  --accent-color: #1976d2;
+  --muted-color: #666666;
+  --success-color: #4caf50;
+  --error-color: #f44336;
+  --input-bg: #f5f5f5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #1e1e1e;
+    --text-color: #e0e0e0;
+    --border-color: #444444;
+    --accent-color: #64b5f6;
+    --muted-color: #aaaaaa;
+    --success-color: #66bb6a;
+    --error-color: #ef5350;
+    --input-bg: #2a2a2a;
+  }
+}
+
+/* Aplicar tema */
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+input, select, button {
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+button {
+  cursor: pointer;
+  background-color: var(--accent-color);
+  color: white;
+  border: none;
+  transition: opacity 0.2s;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input:focus, select:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Spinner animado */
+.spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Progress bar estilizada */
+progress {
+  appearance: none;
+  height: 8px;
+  border-radius: 4px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--border-color);
+}
+
+progress::-webkit-progress-bar {
+  background-color: var(--input-bg);
+  border-radius: 4px;
+}
+
+progress::-webkit-progress-value {
+  background-color: var(--accent-color);
+  border-radius: 4px;
+}
+
+progress::-moz-progress-bar {
+  background-color: var(--accent-color);
+  border-radius: 4px;
+}
+
+/* Ícones Material */
+.material-icons {
+  font-family: 'Material Icons';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  display: inline-block;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: normal;
+  word-wrap: normal;
+  white-space: nowrap;
+  direction: ltr;
+  vertical-align: middle;
+}
+
+/* Botões com ícones */
+button .material-icons {
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
