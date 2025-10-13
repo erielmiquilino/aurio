@@ -9,6 +9,8 @@ let paragraphBlocks: ParagraphBlock[] = [];
 let isInitialized = false;
 let insertedButtons: HTMLButtonElement[] = [];
 const STYLE_ID = 'tts-highlighter-style';
+let activeWordWrap: { paragraphIndex: number; container: HTMLElement; words: HTMLElement[]; baseWords: number } | null = null;
+let activeSelectionWrap: { container: HTMLElement; words: HTMLElement[] } | null = null;
 
 function normalizeText(t: string): string {
   if (!t) return '';
@@ -28,6 +30,18 @@ function normalizeText(t: string): string {
   // compactar espaços e minúsculas
   s = s.replace(/\s+/g, ' ').trim().toLowerCase();
   return s;
+}
+
+function scoreSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 12 || b.length < 12) return a.includes(b) || b.includes(a) ? 1 : 0;
+  const aTokens = new Set(a.split(' '));
+  const bTokens = new Set(b.split(' '));
+  let inter = 0;
+  aTokens.forEach(t => { if (bTokens.has(t)) inter++; });
+  const union = aTokens.size + bTokens.size - inter;
+  return union === 0 ? 0 : inter / union;
 }
 
 function isVisible(el: Element): boolean {
@@ -136,17 +150,6 @@ function injectButtonsInPage(articleHtml: string) {
 
   // Matching sequencial com similaridade
   let candStart = 0;
-  const sim = (a: string, b: string): number => {
-    if (!a || !b) return 0;
-    if (a === b) return 1;
-    if (a.length < 12 || b.length < 12) return a.includes(b) || b.includes(a) ? 1 : 0;
-    const aTokens = new Set(a.split(' '));
-    const bTokens = new Set(b.split(' '));
-    let inter = 0;
-    aTokens.forEach(t => { if (bTokens.has(t)) inter++; });
-    const union = aTokens.size + bTokens.size - inter;
-    return union === 0 ? 0 : inter / union;
-  };
 
   for (let i = 0; i < totalBlocks; i++) {
     const raw = blocks[i].text;
@@ -158,7 +161,7 @@ function injectButtonsInPage(articleHtml: string) {
     for (let j = candStart; j < candidates.length; j++) {
       const cand = candidates[j];
       if (snippet && cand.norm.includes(snippet)) { bestJ = j; bestScore = 1; break; }
-      const score = sim(blockNorm, cand.norm);
+      const score = scoreSimilarity(blockNorm, cand.norm);
       if (score > bestScore) { bestScore = score; bestJ = j; }
     }
     const minScore = blockNorm.length < 40 ? 0.2 : 0.35;
@@ -205,6 +208,117 @@ export function clearHighlight(index: number) {
   }
 }
 
+function splitTextToWordNodes(container: HTMLElement): HTMLElement[] {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  const wordNodes: HTMLElement[] = [];
+  const wrapWord = (textNode: Text, word: string) => {
+    const span = document.createElement('span');
+    span.className = 'tts-word';
+    span.textContent = word;
+    textNode.parentNode?.insertBefore(span, textNode);
+  };
+  const pending: Text[] = [];
+  while (walker.nextNode()) {
+    const tn = walker.currentNode as Text;
+    if (!tn.nodeValue || !tn.nodeValue.trim()) continue;
+    pending.push(tn);
+  }
+  pending.forEach(tn => {
+    const text = tn.nodeValue || '';
+    const parts = text.split(/(\s+)/);
+    const frag = document.createDocumentFragment();
+    for (const part of parts) {
+      if (/^\s+$/.test(part)) {
+        frag.appendChild(document.createTextNode(part));
+      } else if (part.length > 0) {
+        const span = document.createElement('span');
+        span.className = 'tts-word';
+        span.textContent = part;
+        frag.appendChild(span);
+        wordNodes.push(span);
+      }
+    }
+    tn.parentNode?.replaceChild(frag, tn);
+  });
+  return wordNodes;
+}
+
+export function ensureWordWrap(paragraphIndex: number): { container: HTMLElement; words: HTMLElement[] } | null {
+  const el = document.querySelector(`[data-tts-paragraph-index="${paragraphIndex}"]`) as HTMLElement | null;
+  if (!el) {
+    // fallback para seleção ativa
+    if (activeSelectionWrap) return activeSelectionWrap;
+    return null;
+  }
+  if (activeWordWrap && activeWordWrap.paragraphIndex === paragraphIndex) {
+    return { container: activeWordWrap.container, words: activeWordWrap.words };
+  }
+  // limpar anterior
+  if (activeWordWrap) {
+    activeWordWrap.words.forEach(w => w.classList.remove('tts-word-reading'));
+  }
+  const words = splitTextToWordNodes(el);
+  activeWordWrap = { paragraphIndex, container: el, words, baseWords: words.length };
+  return { container: el, words };
+}
+
+let lastScrollTs = 0;
+export function highlightWord(paragraphIndex: number, wordIndex: number) {
+  const wrap = ensureWordWrap(paragraphIndex);
+  if (!wrap) return;
+  const { words } = wrap;
+  const prev = document.querySelector('.tts-word-reading');
+  if (prev) prev.classList.remove('tts-word-reading');
+  // Guardar contra index out of range: truncar
+  const safeIndex = Math.max(0, Math.min(wordIndex, words.length - 1));
+  const w = words[safeIndex];
+  if (w) {
+    w.classList.add('tts-word-reading');
+    // Throttle de scroll: no máximo a cada 120ms
+    const now = performance.now();
+    if (now - lastScrollTs > 120) {
+      const rect = w.getBoundingClientRect();
+      const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+      const isVisible = rect.top >= 0 && rect.bottom <= vh;
+      if (!isVisible) w.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      lastScrollTs = now;
+    }
+  }
+}
+
+export function prepareSelectionWrap(): boolean {
+  try {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed) return false;
+    // Se a seleção já está embrulhada, reaproveitar
+    const common = range.commonAncestorContainer;
+    const existing = (common.nodeType === 1 ? (common as Element) : common.parentElement)?.closest?.('.tts-selection-wrap');
+    if (existing) {
+      const words = splitTextToWordNodes(existing as HTMLElement);
+      activeSelectionWrap = { container: existing as HTMLElement, words };
+      return true;
+    }
+    const wrapper = document.createElement('span');
+    wrapper.className = 'tts-selection-wrap';
+    try {
+      range.surroundContents(wrapper);
+    } catch (_) {
+      // Fallback: extrai conteúdo e reinsere embrulhado
+      const frag = range.cloneContents();
+      range.deleteContents();
+      wrapper.appendChild(frag);
+      range.insertNode(wrapper);
+    }
+    const words = splitTextToWordNodes(wrapper);
+    activeSelectionWrap = { container: wrapper, words };
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * Inicializa o sistema injetando botões diretamente no DOM da página
  */
@@ -242,8 +356,10 @@ function ensureStyleInjected() {
   style.textContent = `
 .tts-paragraph-button{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-right:8px;background:var(--accent-color,#1976d2);border:none;border-radius:50%;cursor:pointer;opacity:.7;transition:opacity .2s,transform .1s;vertical-align:middle;font-size:14px;padding:0;position:relative;top:-2px}
 .tts-paragraph-button:hover{opacity:1;transform:scale(1.1)}
-.tts-reading{background-color:#fff3cd !important;box-shadow:0 0 0 4px #fff3cd;border-radius:4px;transition:background-color .3s,box-shadow .3s;padding:8px;margin:4px 0}
-@media (prefers-color-scheme: dark){.tts-reading{background-color:#4a4a2e !important;box-shadow:0 0 0 4px #4a4a2e}}
+.tts-reading{outline: 3px solid rgba(25,118,210,.35);outline-offset: 2px;border-radius:4px}
+@media (prefers-color-scheme: dark){.tts-reading{outline: 3px solid rgba(100,181,246,.35)}}
+.tts-word{transition:background-color .08s,color .08s}
+.tts-word-reading{background:var(--accent-color,#1976d2);color:#fff;border-radius:3px;padding:0 2px}
 `;
   document.head.appendChild(style);
   console.log('[TTS][highlighter] estilos injetados');

@@ -29,6 +29,8 @@ export type TtsAudioChunk = {
   chunkIndex: number;
   totalChunks: number;
   audio: ArrayBuffer;
+  paragraphIndex?: number;
+  text?: string;
 };
 
 export type TtsProgress = {

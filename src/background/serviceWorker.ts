@@ -188,7 +188,8 @@ async function produceAudioForTab(tabId: number) {
             paragraphIndex: absoluteParagraphIndex,
             chunkIndex: j,
             totalChunks: item.chunks.length,
-            audio: audioArray
+            audio: audioArray,
+            text: item.chunks[j]
           });
           console.log('[TTS][bg] TTS_AUDIO_CHUNK enviado', { tabId, paragraph: i, chunk: j, audioArrayLen: audioArray.length });
         } catch (sendErr) {

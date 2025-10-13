@@ -15,9 +15,11 @@ function ensureAudio() {
     audioEl = document.createElement('audio');
     audioEl.style.display = 'none';
     document.documentElement.appendChild(audioEl);
-    audioEl.addEventListener('ended', () => {
-      playNext();
-    });
+  audioEl.addEventListener('ended', () => {
+    // finalizar sync do chunk e ir para o próximo
+    if (wordSyncRaf) cancelAnimationFrame(wordSyncRaf);
+    playNext();
+  });
     audioEl.addEventListener('error', (e) => {
       console.error('[TTS][content] audio error', e);
       if (audioEl?.error) {
@@ -56,20 +58,101 @@ function playNext() {
     return;
   }
   console.log('[TTS][content] playNext', { queueRemainingAfterShift: queue.length, audioSize: next.buf.byteLength, paragraphIndex: next.paragraphIndex, chunkIndex: next.chunkIndex });
-  // Aplicar highlight somente quando o áudio vai começar a tocar
-  if (typeof next.paragraphIndex === 'number' && next.chunkIndex === 0) {
-    try {
-      ttsHighlighter.highlightParagraph(next.paragraphIndex);
-    } catch (_) { /* ignore */ }
-  }
   if (sourceUrl) URL.revokeObjectURL(sourceUrl);
   sourceUrl = arrayBufferToBlobUrl(next.buf);
   audioEl.src = sourceUrl;
   isPlaying = true;
   console.log('[TTS][content] audio.src definido, chamando play()', { blobUrl: sourceUrl });
+  // Iniciar sincronização de palavras somente quando a duração do áudio estiver disponível (evita duration Infinity/NaN)
+  try {
+    const beginSyncIfReady = () => {
+      const dur = audioEl?.duration;
+      const hasDuration = !!dur && isFinite(dur) && dur > 0;
+      if (!hasDuration) return;
+      audioEl?.removeEventListener('loadedmetadata', beginSyncIfReady);
+      audioEl?.removeEventListener('durationchange', beginSyncIfReady);
+      if (next.paragraphIndex != null && typeof next.totalChunks === 'number') {
+        startWordSync(next.paragraphIndex, next);
+      } else {
+        // fallback: tentar identificar parágrafo pelo texto
+        try {
+          const text = (next as any).text as string | undefined;
+          if (text) {
+            const norm = text.toLowerCase().replace(/\s+/g, ' ').trim();
+            const elements = document.querySelectorAll('[data-tts-bound]');
+            let foundIndex: number | null = null;
+            elements.forEach((el) => {
+              if (foundIndex != null) return;
+              const elText = (el as HTMLElement).innerText?.toLowerCase().replace(/\s+/g, ' ').trim() || '';
+              if (elText.includes(norm.slice(0, Math.min(60, Math.floor(norm.length * 0.5))))) {
+                const idxStr = (el as HTMLElement).getAttribute('data-tts-paragraph-index');
+                const idx = idxStr ? parseInt(idxStr, 10) : NaN;
+                if (!Number.isNaN(idx)) foundIndex = idx;
+              }
+            });
+            if (foundIndex != null) {
+              (next as any).paragraphIndex = foundIndex;
+              startWordSync(foundIndex, next);
+            }
+          }
+        } catch (_) { /* ignore */ }
+      }
+    };
+    audioEl.addEventListener('loadedmetadata', beginSyncIfReady);
+    audioEl.addEventListener('durationchange', beginSyncIfReady);
+    // Caso a duração já esteja pronta
+    beginSyncIfReady();
+  } catch (_) { /* ignore */ }
   audioEl.play().catch(err => {
     console.error('[TTS][content] autoplay/play error', err);
   });
+}
+function tokenizeWords(text: string): { words: string[]; cumulative: number[] } {
+  const parts = text.split(/(\s+)/);
+  const words: string[] = [];
+  const cumulative: number[] = [];
+  let sum = 0;
+  for (const p of parts) {
+    if (/^\s+$/.test(p)) { sum += p.length; continue; }
+    if (p.length === 0) continue;
+    words.push(p);
+    sum += p.length;
+    cumulative.push(sum);
+  }
+  return { words, cumulative };
+}
+
+let wordSyncRaf = 0;
+let currentSyncParagraph: number | null = null;
+let currentSyncChunkId = 0;
+function startWordSync(paragraphIndex: number, item: AudioQueueItem) {
+  if (!audioEl) return;
+  // Se não tiver texto do chunk, aborta; usaremos apenas highlight por parágrafo
+  const text = (item as any).text as string | undefined;
+  if (!text) return;
+  // Garantir wrap de palavras do parágrafo
+  try { (ttsHighlighter as any).ensureWordWrap(paragraphIndex); } catch (_) { /* ignore */ }
+  // Realçar a primeira palavra imediatamente para dar feedback
+  try { (ttsHighlighter as any).highlightWord(paragraphIndex, 0); } catch (_) { /* ignore */ }
+  const { words, cumulative } = tokenizeWords(text);
+  const duration = Math.max(audioEl.duration || 0, 0.001);
+  const chunkIndex = item.chunkIndex;
+  const totalChunks = item.totalChunks;
+  // Estimativa linear: posição do áudio dentro do chunk controla palavra
+  const tick = () => {
+    if (!audioEl) return;
+    if (audioEl.paused) { wordSyncRaf = requestAnimationFrame(tick); return; }
+    const rel = Math.min(Math.max(audioEl.currentTime / duration, 0), 1);
+    const charPos = Math.floor(rel * (cumulative[cumulative.length - 1] || 1));
+    let wordIdx = cumulative.findIndex(c => c > charPos);
+    if (wordIdx < 0) wordIdx = Math.max(0, words.length - 1);
+    try { (ttsHighlighter as any).highlightWord(paragraphIndex, wordIdx); } catch (_) { /* ignore */ }
+    wordSyncRaf = requestAnimationFrame(tick);
+  };
+  if (wordSyncRaf) cancelAnimationFrame(wordSyncRaf);
+  currentSyncParagraph = paragraphIndex;
+  currentSyncChunkId++;
+  wordSyncRaf = requestAnimationFrame(tick);
 }
 
 function startPlayForRequest(requestId: string) {
@@ -117,7 +200,9 @@ chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (
       buf: audioBuffer,
       paragraphIndex: typeof m.paragraphIndex === 'number' ? m.paragraphIndex : null,
       chunkIndex: typeof m.chunkIndex === 'number' ? m.chunkIndex : -1,
-      totalChunks: typeof m.totalChunks === 'number' ? m.totalChunks : -1
+      totalChunks: typeof m.totalChunks === 'number' ? m.totalChunks : -1,
+      // @ts-ignore - armazenar texto do chunk para sincronização aproximada
+      text: typeof m.text === 'string' ? m.text : ''
     });
     console.log('[TTS][content] chunk adicionado à fila', { queueLen: queue.length, isPlaying, paragraphIndex: m.paragraphIndex, chunkIndex: m.chunkIndex });
     if (!isPlaying) playNext();
@@ -163,6 +248,7 @@ export function requestSpeak(voiceName: string, rate: string, pitch: string, use
     return;
   }
   const text = selection;
+  try { (ttsHighlighter as any).prepareSelectionWrap(); } catch (_) { /* ignore */ }
   console.log('[TTS][content] requestSpeak com seleção', { len: text.length, voiceName });
   const req: TtsRequest = {
     type: 'TTS_REQUEST',
