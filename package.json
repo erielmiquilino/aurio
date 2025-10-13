@@ -2,6 +2,7 @@
   "name": "aurio-chrome-tts",
   "version": "0.1.0",
   "private": true,
+  "license": "Unlicense",
   "type": "module",
   "scripts": {
     "clean": "rimraf dist || rmdir /s /q dist",

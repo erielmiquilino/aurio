@@ -1,3 +1,31 @@
 node_modules/
 dist/
 
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# Env (não versionar credenciais)
+.env
+.env.*
+
+# Cache/temporários
+.eslintcache
+.turbo
+.cache/
+tmp/
+temp/
+
+# Artefatos de extensão
+*.crx
+*.pem
+*.zip
