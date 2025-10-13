@@ -1,10 +1,12 @@
 import type { TtsAudioChunk, TtsRequest } from '../lib/messaging';
-import { extractText } from '../lib/readability';
+import { extractText, extractHtmlWithReadability } from '../lib/readability';
+import * as ttsHighlighter from './ttsHighlighter';
 
 let audioEl: HTMLAudioElement | null = null;
 let sourceUrl: string | null = null;
 let playingRequestId: string | null = null;
-let queue: ArrayBuffer[] = [];
+type AudioQueueItem = { buf: ArrayBuffer; paragraphIndex: number | null; chunkIndex: number; totalChunks: number };
+let queue: AudioQueueItem[] = [];
 let isPlaying = false;
 let isPaused = false;
 
@@ -53,9 +55,15 @@ function playNext() {
     sourceUrl = null;
     return;
   }
-  console.log('[TTS][content] playNext', { queueRemainingAfterShift: queue.length, audioSize: next.byteLength });
+  console.log('[TTS][content] playNext', { queueRemainingAfterShift: queue.length, audioSize: next.buf.byteLength, paragraphIndex: next.paragraphIndex, chunkIndex: next.chunkIndex });
+  // Aplicar highlight somente quando o áudio vai começar a tocar
+  if (typeof next.paragraphIndex === 'number' && next.chunkIndex === 0) {
+    try {
+      ttsHighlighter.highlightParagraph(next.paragraphIndex);
+    } catch (_) { /* ignore */ }
+  }
   if (sourceUrl) URL.revokeObjectURL(sourceUrl);
-  sourceUrl = arrayBufferToBlobUrl(next);
+  sourceUrl = arrayBufferToBlobUrl(next.buf);
   audioEl.src = sourceUrl;
   isPlaying = true;
   console.log('[TTS][content] audio.src definido, chamando play()', { blobUrl: sourceUrl });
@@ -77,7 +85,7 @@ function extractSelectedOrAllText(): string {
   return document.body?.innerText ?? '';
 }
 
-chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response?: any) => void) => {
   if (message.type === 'TTS_AUDIO_CHUNK') {
     const m = message as any; // Recebemos array de números, não TtsAudioChunk typed
     console.log('[TTS][content] TTS_AUDIO_CHUNK recebido (raw)', { requestId: m.requestId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, audioType: typeof m.audio, audioIsArray: Array.isArray(m.audio), audioLen: m.audio?.length });
@@ -104,8 +112,14 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
       console.log('[TTS][content] nova request, resetando fila', { oldReqId: playingRequestId, newReqId: m.requestId });
       startPlayForRequest(m.requestId);
     }
-    queue.push(audioBuffer);
-    console.log('[TTS][content] chunk adicionado à fila', { queueLen: queue.length, isPlaying });
+    // Empilhar com metadados para controlar highlight no momento do play
+    queue.push({
+      buf: audioBuffer,
+      paragraphIndex: typeof m.paragraphIndex === 'number' ? m.paragraphIndex : null,
+      chunkIndex: typeof m.chunkIndex === 'number' ? m.chunkIndex : -1,
+      totalChunks: typeof m.totalChunks === 'number' ? m.totalChunks : -1
+    });
+    console.log('[TTS][content] chunk adicionado à fila', { queueLen: queue.length, isPlaying, paragraphIndex: m.paragraphIndex, chunkIndex: m.chunkIndex });
     if (!isPlaying) playNext();
   }
   if (message.type === 'PDF_DATA') {
@@ -118,6 +132,11 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
     const { voiceName, rate, pitch, useReadability } = message;
     console.log('[TTS][content] CONTENT_SPEAK recebido', { voiceName, rate, pitch, useReadability });
     requestSpeak(voiceName, rate, pitch, useReadability);
+  }
+  if (message.type === 'CONTENT_PREPARE') {
+    const { voiceName, rate, pitch, useReadability } = message;
+    console.log('[TTS][content] CONTENT_PREPARE recebido', { voiceName, rate, pitch, useReadability });
+    prepareSpeak(voiceName, rate, pitch, useReadability);
   }
   if (message.type === 'CONTENT_STOP') {
     stopSpeak();
@@ -132,22 +151,19 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
     const { voiceName, rate, pitch } = message;
     readPdf(voiceName, rate, pitch);
   }
+  // Removido: agora o highlight é acionado no primeiro chunk de cada parágrafo
 });
 
 // Exposed helpers used by popup via scripting.executeScript
 export function requestSpeak(voiceName: string, rate: string, pitch: string, useReadability = false) {
-  let text: string;
   const selection = window.getSelection()?.toString() || '';
-  
-  if (selection) {
-    // Se há seleção, usar o texto selecionado
-    text = selection;
-  } else {
-    // Se não há seleção, usar extração de texto (com ou sem Readability)
-    text = extractText(useReadability);
+  if (!selection) {
+    console.log('[TTS][content] requestSpeak sem seleção → preparando mapeamento');
+    prepareSpeak(voiceName, rate, pitch, useReadability);
+    return;
   }
-  
-  console.log('[TTS][content] requestSpeak', { len: text.length, voiceName, rate, pitch, useReadability, hasSelection: !!selection });
+  const text = selection;
+  console.log('[TTS][content] requestSpeak com seleção', { len: text.length, voiceName });
   const req: TtsRequest = {
     type: 'TTS_REQUEST',
     tabId: (window as any).chrome?.devtools ? -1 : (window as any).chrome?.tabs ? (window as any).chrome.tabs.TAB_ID_NONE : -1,
@@ -160,9 +176,40 @@ export function requestSpeak(voiceName: string, rate: string, pitch: string, use
   chrome.runtime.sendMessage(req);
 }
 
+export async function prepareSpeak(voiceName: string, rate: string, pitch: string, useReadability = true) {
+  try {
+    const toSet: any = { useReadability };
+    if (voiceName) toSet.defaultVoice = voiceName;
+    if (rate) toSet.defaultRate = rate;
+    if (pitch) toSet.defaultPitch = pitch;
+    await chrome.storage.local.set(toSet);
+  } catch (_) { /* ignore */ }
+  const selection = window.getSelection()?.toString() || '';
+  if (selection) {
+    // Se há seleção, manter comportamento de leitura imediata
+    requestSpeak(voiceName, rate, pitch, useReadability);
+    return;
+  }
+  let articleHtml = '';
+  if (useReadability) {
+    const html = extractHtmlWithReadability();
+    if (html) articleHtml = html;
+  }
+  if (!articleHtml) {
+    // Fallback: usar body inteiro (mapeamento filtra pelo DOM principal)
+    articleHtml = document.body?.innerHTML || '';
+  }
+  console.log('[TTS][content] preparando mapeamento', { htmlLen: articleHtml.length, useReadability });
+  ttsHighlighter.initHighlighter(articleHtml);
+}
+
 export function stopSpeak() {
   chrome.runtime.sendMessage({ type: 'TTS_STOP', tabId: -1 });
   if (audioEl) audioEl.pause();
+  // Limpar highlighter se estiver ativo
+  if (ttsHighlighter.isActive()) {
+    ttsHighlighter.cleanup();
+  }
 }
 
 export function pauseSpeak() {
@@ -186,6 +233,8 @@ export function readPdf(voiceName: string, rate: string, pitch: string) {
 // Expor no window para chamadas via scripting
 // @ts-ignore
 ;(window as any).requestSpeak = requestSpeak;
+// @ts-ignore
+;(window as any).prepareSpeak = prepareSpeak;
 // @ts-ignore
 ;(window as any).stopSpeak = stopSpeak;
 // @ts-ignore

@@ -1,5 +1,5 @@
 import { buildSsml, listVoices, synthesize, AzureCredentials } from '../lib/azureTts';
-import type { Messages, TtsRequest, GetVoices, TtsStop, TtsPause, TtsResume, ReadPdf, PdfData } from '../lib/messaging';
+import type { Messages, TtsRequest, GetVoices, TtsStop, TtsPause, TtsResume, ReadPdf, PdfData, TtsPlayParagraph } from '../lib/messaging';
 import { chunkByLength, splitIntoParagraphs } from '../lib/chunkText';
 import * as audioCache from '../lib/audioCache';
 
@@ -16,6 +16,7 @@ type TabQueue = {
   pitch: string;
   playing: boolean;
   paused: boolean;
+  startParagraphIndex: number; // índice do parágrafo inicial para highlighting
 };
 
 const tabIdToQueue = new Map<number, TabQueue>();
@@ -39,7 +40,7 @@ function updateBadge(tabId: number, state: 'playing' | 'paused' | 'stopped') {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: 'speak-selection', title: 'Ler seleção', contexts: ['selection'] });
-  chrome.contextMenus.create({ id: 'speak-page', title: 'Ler página', contexts: ['page'] });
+  chrome.contextMenus.create({ id: 'speak-page', title: 'Mapear parágrafos desta página', contexts: ['page'] });
   chrome.contextMenus.create({ id: 'speak-pdf', title: 'Ler PDF desta guia', contexts: ['page'] });
 });
 
@@ -60,7 +61,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       target: { tabId },
       func: () => {
         // @ts-ignore
-        window.requestSpeak?.(undefined, undefined, undefined);
+        window.prepareSpeak?.(undefined, undefined, undefined, true);
       }
     });
   }
@@ -152,6 +153,8 @@ async function produceAudioForTab(tabId: number) {
   for (let i = 0; i < queue.items.length; i++) {
     if (!queue.playing) break;
     const item = queue.items[i];
+    const absoluteParagraphIndex = queue.startParagraphIndex + i;
+    
     for (let j = 0; j < item.chunks.length; j++) {
       // Pause handling
       while (queue.paused && queue.playing) {
@@ -182,6 +185,7 @@ async function produceAudioForTab(tabId: number) {
           await chrome.tabs.sendMessage(tabId, {
             type: 'TTS_AUDIO_CHUNK',
             requestId: queue.requestId,
+            paragraphIndex: absoluteParagraphIndex,
             chunkIndex: j,
             totalChunks: item.chunks.length,
             audio: audioArray
@@ -198,6 +202,7 @@ async function produceAudioForTab(tabId: number) {
         break;
       }
     }
+
     chrome.tabs.sendMessage(tabId, {
       type: 'TTS_PROGRESS',
       requestId: queue.requestId,
@@ -233,7 +238,8 @@ function handleTtsRequest(msg: TtsRequest, sender: chrome.runtime.MessageSender)
       rate,
       pitch,
       playing: false,
-      paused: false
+      paused: false,
+      startParagraphIndex: 0 // leitura completa começa do início
     });
     produceAudioForTab(tabId);
   })();
@@ -266,6 +272,40 @@ function handleResume(msg: TtsResume) {
   console.log('[TTS][bg] resume', msg.tabId);
 }
 
+function handleTtsPlayParagraph(msg: TtsPlayParagraph, sender: chrome.runtime.MessageSender) {
+  const tabId = sender.tab?.id ?? msg.tabId;
+  if (tabId == null) {
+    console.error('[TTS][bg] handleTtsPlayParagraph sem tabId');
+    return;
+  }
+  
+  console.log('[TTS][bg] TTS_PLAY_PARAGRAPH recebido', { 
+    tabId, 
+    paragraphIndex: msg.paragraphIndex, 
+    totalBlocks: msg.textBlocks.length,
+    voiceName: msg.voiceName
+  });
+  
+  // Processar os textBlocks diretamente (já vêm separados por parágrafo)
+  const items: QueueItem[] = msg.textBlocks.map((text, idx) => ({
+    paragraphIndex: msg.paragraphIndex + idx,
+    chunks: chunkByLength(text, 1000)
+  }));
+  
+  tabIdToQueue.set(tabId, {
+    requestId: msg.requestId,
+    items,
+    voiceName: msg.voiceName,
+    rate: msg.rate,
+    pitch: msg.pitch,
+    playing: false,
+    paused: false,
+    startParagraphIndex: msg.paragraphIndex // começa do índice especificado
+  });
+  
+  produceAudioForTab(tabId);
+}
+
 chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
   switch (message.type) {
     case 'GET_VOICES':
@@ -273,6 +313,9 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
       break;
     case 'TTS_REQUEST':
       handleTtsRequest(message as TtsRequest, sender);
+      break;
+    case 'TTS_PLAY_PARAGRAPH':
+      handleTtsPlayParagraph(message as TtsPlayParagraph, sender);
       break;
     case 'TTS_STOP':
       handleStop(message as TtsStop);

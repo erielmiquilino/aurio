@@ -19,18 +19,18 @@ function Popup() {
   useEffect(() => {
     setLoading(true);
     // Pedir contador de sessão ao background
-    chrome.runtime.sendMessage({ type: 'GET_SESSION_CHARS' }, (response) => {
+    chrome.runtime.sendMessage({ type: 'GET_SESSION_CHARS' }, (response: any) => {
       if (response?.sessionChars != null) setSessionChars(response.sessionChars);
     });
     chrome.runtime.sendMessage({ type: 'GET_VOICES' });
-    chrome.storage.local.get(['defaultVoice', 'defaultRate', 'defaultPitch', 'useReadability'], (res) => {
+    chrome.storage.local.get(['defaultVoice', 'defaultRate', 'defaultPitch', 'useReadability'], (res: any) => {
       if (res.defaultVoice) setVoice(res.defaultVoice);
       if (res.defaultRate) setRate(res.defaultRate);
       if (res.defaultPitch) setPitch(res.defaultPitch);
       if (res.useReadability != null) setUseReadability(res.useReadability);
     });
     // Verificar se a aba atual é PDF
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
       const tab = tabs[0];
       if (tab?.url?.toLowerCase().endsWith('.pdf')) {
         setIsPdfTab(true);
@@ -64,9 +64,10 @@ function Popup() {
   function play() {
     withActiveTab(async (tab) => {
       try {
-        await chrome.tabs.sendMessage(tab.id!, { type: 'CONTENT_SPEAK', voiceName: voice, rate, pitch, useReadability });
+        // Novo comportamento: apenas preparar (mapear) a página
+        await chrome.tabs.sendMessage(tab.id!, { type: 'CONTENT_PREPARE', voiceName: voice, rate, pitch, useReadability });
       } catch (err) {
-        console.error('[TTS][popup] sendMessage CONTENT_SPEAK error', err);
+        console.error('[TTS][popup] sendMessage CONTENT_PREPARE error', err);
       }
     });
   }
@@ -168,8 +169,8 @@ function Popup() {
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
         <button onClick={play} disabled={loading}>
-          <span className="material-icons" style={{ fontSize: 16, marginRight: 4 }}>play_arrow</span>
-          Ler
+          <span className="material-icons" style={{ fontSize: 16, marginRight: 4 }}>playlist_add</span>
+          Mapear parágrafos
         </button>
         <button onClick={pause}>
           <span className="material-icons" style={{ fontSize: 16, marginRight: 4 }}>pause</span>

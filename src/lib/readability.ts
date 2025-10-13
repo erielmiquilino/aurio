@@ -1,6 +1,31 @@
 // Wrapper para @mozilla/readability com fallback para extração simples
 import { Readability } from '@mozilla/readability';
 
+export function extractHtmlWithReadability(): string | null {
+  try {
+    // Clone do document para evitar modificar a página original
+    const documentClone = document.cloneNode(true) as Document;
+    
+    const reader = new Readability(documentClone);
+    const article = reader.parse();
+    
+    if (article && article.content) {
+      console.log('[TTS][readability] extração HTML OK', { 
+        title: article.title, 
+        htmlLen: article.content.length,
+        excerpt: article.excerpt?.substring(0, 100)
+      });
+      return article.content;
+    } else {
+      console.warn('[TTS][readability] parse retornou null');
+      return null;
+    }
+  } catch (e) {
+    console.error('[TTS][readability] erro ao extrair HTML', e);
+    return null;
+  }
+}
+
 export function extractTextWithReadability(): string | null {
   try {
     // Clone do document para evitar modificar a página original

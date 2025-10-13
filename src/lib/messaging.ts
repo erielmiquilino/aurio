@@ -69,6 +69,27 @@ export type TtsError = {
   message: string;
 };
 
+export type TtsPlayParagraph = {
+  type: 'TTS_PLAY_PARAGRAPH';
+  tabId: number;
+  requestId: string;
+  paragraphIndex: number;
+  textBlocks: string[]; // todos os parágrafos do index até o final
+  voiceName: string;
+  rate: string;
+  pitch: string;
+};
+
+export type TtsHighlightParagraph = {
+  type: 'TTS_HIGHLIGHT_PARAGRAPH';
+  paragraphIndex: number;
+};
+
+export type TtsClearHighlight = {
+  type: 'TTS_CLEAR_HIGHLIGHT';
+  paragraphIndex: number;
+};
+
 export type Messages =
   | TtsRequest
   | TtsStop
@@ -80,6 +101,9 @@ export type Messages =
   | SetCredentials
   | ReadPdf
   | PdfData
-  | TtsError;
+  | TtsError
+  | TtsPlayParagraph
+  | TtsHighlightParagraph
+  | TtsClearHighlight;
 
 

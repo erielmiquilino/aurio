@@ -129,3 +129,46 @@ button .material-icons {
   margin-right: 4px;
 }
 
+/* TTS Highlighter - Botões de parágrafo */
+.tts-paragraph-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  background: var(--accent-color);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s, transform 0.1s;
+  vertical-align: middle;
+  font-size: 14px;
+  padding: 0;
+  position: relative;
+  top: -2px;
+}
+
+.tts-paragraph-button:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* Destaque do parágrafo em leitura */
+.tts-reading {
+  background-color: #fff3cd !important;
+  box-shadow: 0 0 0 4px #fff3cd;
+  border-radius: 4px;
+  transition: background-color 0.3s, box-shadow 0.3s;
+  padding: 8px;
+  margin: 4px 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tts-reading {
+    background-color: #4a4a2e !important;
+    box-shadow: 0 0 0 4px #4a4a2e;
+  }
+}
+
