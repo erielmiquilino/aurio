@@ -5,12 +5,19 @@ type ParagraphBlock = {
   text: string;
 };
 
+type WordWrapMutation = {
+  parent: Node;
+  nodes: Node[];
+  text: string;
+};
+
 let paragraphBlocks: ParagraphBlock[] = [];
 let isInitialized = false;
 let insertedButtons: HTMLButtonElement[] = [];
 const STYLE_ID = 'tts-highlighter-style';
 let activeWordWrap: { paragraphIndex: number; container: HTMLElement; words: HTMLElement[]; baseWords: number } | null = null;
 let activeSelectionWrap: { container: HTMLElement; words: HTMLElement[] } | null = null;
+let wordWrapMutations: WordWrapMutation[] = [];
 
 function normalizeText(t: string): string {
   if (!t) return '';
@@ -214,37 +221,74 @@ export function clearHighlight(index: number) {
 
 function splitTextToWordNodes(container: HTMLElement): HTMLElement[] {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-  const wordNodes: HTMLElement[] = [];
-  const wrapWord = (textNode: Text, word: string) => {
-    const span = document.createElement('span');
-    span.className = 'tts-word';
-    span.textContent = word;
-    textNode.parentNode?.insertBefore(span, textNode);
-  };
   const pending: Text[] = [];
   while (walker.nextNode()) {
     const tn = walker.currentNode as Text;
     if (!tn.nodeValue || !tn.nodeValue.trim()) continue;
+    if (tn.parentElement?.closest('.tts-word, .tts-paragraph-button')) continue;
     pending.push(tn);
   }
   pending.forEach(tn => {
     const text = tn.nodeValue || '';
     const parts = text.split(/(\s+)/);
     const frag = document.createDocumentFragment();
+    const createdNodes: Node[] = [];
     for (const part of parts) {
       if (/^\s+$/.test(part)) {
-        frag.appendChild(document.createTextNode(part));
+        const textNode = document.createTextNode(part);
+        createdNodes.push(textNode);
+        frag.appendChild(textNode);
       } else if (part.length > 0) {
         const span = document.createElement('span');
         span.className = 'tts-word';
         span.textContent = part;
+        createdNodes.push(span);
         frag.appendChild(span);
-        wordNodes.push(span);
       }
     }
-    tn.parentNode?.replaceChild(frag, tn);
+    const parent = tn.parentNode;
+    if (parent) {
+      parent.replaceChild(frag, tn);
+      wordWrapMutations.push({ parent, nodes: createdNodes, text });
+    }
   });
-  return wordNodes;
+  return Array.from(container.querySelectorAll<HTMLElement>('.tts-word'));
+}
+
+function areMutationNodesIntact(mutation: WordWrapMutation): boolean {
+  if (mutation.nodes.length === 0) return false;
+  if (mutation.nodes[0].parentNode !== mutation.parent) return false;
+  for (let i = 1; i < mutation.nodes.length; i++) {
+    if (mutation.nodes[i].parentNode !== mutation.parent) return false;
+    if (mutation.nodes[i - 1].nextSibling !== mutation.nodes[i]) return false;
+  }
+  return true;
+}
+
+function restoreWordWrapMutations() {
+  document.querySelectorAll('.tts-word-reading')
+    .forEach(el => el.classList.remove('tts-word-reading'));
+
+  for (let i = wordWrapMutations.length - 1; i >= 0; i--) {
+    const mutation = wordWrapMutations[i];
+    if (!areMutationNodesIntact(mutation)) continue;
+    const textNode = document.createTextNode(mutation.text);
+    mutation.parent.insertBefore(textNode, mutation.nodes[0]);
+    mutation.nodes.forEach(node => node.parentNode?.removeChild(node));
+  }
+
+  wordWrapMutations = [];
+}
+
+function unwrapSelectionWraps() {
+  document.querySelectorAll<HTMLElement>('.tts-selection-wrap').forEach(wrapper => {
+    const parent = wrapper.parentNode;
+    if (!parent) return;
+    while (wrapper.firstChild) {
+      parent.insertBefore(wrapper.firstChild, wrapper);
+    }
+    parent.removeChild(wrapper);
+  });
 }
 
 export function ensureWordWrap(paragraphIndex: number): { container: HTMLElement; words: HTMLElement[] } | null {
@@ -336,6 +380,8 @@ export function initHighlighter(articleHtml: string) {
 
 export function cleanup() {
   console.log('[TTS][highlighter] limpando');
+  restoreWordWrapMutations();
+  unwrapSelectionWraps();
   document.querySelectorAll('[data-tts-paragraph-index]').forEach(el => {
     el.removeAttribute('data-tts-paragraph-index');
     el.classList.remove('tts-reading');
@@ -345,12 +391,14 @@ export function cleanup() {
   insertedButtons.forEach(btn => btn.remove());
   insertedButtons = [];
   paragraphBlocks = [];
+  activeWordWrap = null;
+  activeSelectionWrap = null;
   isInitialized = false;
   console.log('[TTS][highlighter] limpo');
 }
 
 export function isActive(): boolean {
-  return isInitialized;
+  return isInitialized || activeWordWrap !== null || activeSelectionWrap !== null || wordWrapMutations.length > 0;
 }
 
 function ensureStyleInjected() {

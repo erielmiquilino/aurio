@@ -157,9 +157,18 @@ function startWordSync(paragraphIndex: number, item: AudioQueueItem) {
 
 function startPlayForRequest(requestId: string) {
   ensureAudio();
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.removeAttribute('src');
+    audioEl.load();
+  }
+  if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+  sourceUrl = null;
+  if (wordSyncRaf) cancelAnimationFrame(wordSyncRaf);
+  isPlaying = false;
+  isPaused = false;
   playingRequestId = requestId;
   queue = [];
-  playNext();
 }
 
 function extractSelectedOrAllText(): string {
@@ -169,9 +178,16 @@ function extractSelectedOrAllText(): string {
 }
 
 chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response?: any) => void) => {
+  if (message.type === 'TTS_REQUEST_STARTED') {
+    startPlayForRequest(message.requestId);
+  }
   if (message.type === 'TTS_AUDIO_CHUNK') {
     const m = message as any; // Recebemos array de números, não TtsAudioChunk typed
     console.log('[TTS][content] TTS_AUDIO_CHUNK recebido (raw)', { requestId: m.requestId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, audioType: typeof m.audio, audioIsArray: Array.isArray(m.audio), audioLen: m.audio?.length });
+    if (playingRequestId && playingRequestId !== m.requestId) {
+      console.log('[TTS][content] chunk antigo ignorado', { currentReqId: playingRequestId, chunkReqId: m.requestId });
+      return;
+    }
     
     // Converter array de bytes de volta para ArrayBuffer
     let audioBuffer: ArrayBuffer;

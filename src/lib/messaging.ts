@@ -40,6 +40,11 @@ export type TtsProgress = {
   totalParagraphs: number;
 };
 
+export type TtsRequestStarted = {
+  type: 'TTS_REQUEST_STARTED';
+  requestId: string;
+};
+
 export type GetVoices = {
   type: 'GET_VOICES';
 };
@@ -99,6 +104,7 @@ export type Messages =
   | TtsResume
   | TtsAudioChunk
   | TtsProgress
+  | TtsRequestStarted
   | GetVoices
   | SetCredentials
   | ReadPdf
