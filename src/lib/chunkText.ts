@@ -1,7 +1,7 @@
 export function splitIntoParagraphs(input: string): string[] {
   const normalized = input.replace(/\r\n?/g, '\n');
   return normalized
-    .split(/\n{2,}/)
+    .split(/(?:\n[ \t]*){2,}/)
     .map(p => p.trim())
     .filter(p => p.length > 0);
 }

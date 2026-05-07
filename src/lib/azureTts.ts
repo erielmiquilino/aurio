@@ -50,7 +50,9 @@ export function buildSsml(text: string, voiceName: string, rate: string, pitch: 
   })();
   const normalizedRate = (() => {
     if (!rate || rate.trim().length === 0) return '0%';
-    return rate.trim();
+    const r = rate.trim();
+    if (/[-+]?\d+%$/.test(r)) return r;
+    return '0%';
   })();
   return `<?xml version="1.0" encoding="utf-8"?>
 <speak version="1.0" xml:lang="${locale}" xmlns:mstts="http://www.w3.org/2001/mstts">
