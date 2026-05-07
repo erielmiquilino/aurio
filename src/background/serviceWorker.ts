@@ -1,12 +1,8 @@
 import { buildSsml, listVoices, synthesize, AzureCredentials } from '../lib/azureTts';
 import type { Messages, TtsRequest, GetVoices, TtsStop, TtsPause, TtsResume, ReadPdf, PdfData, TtsPlayParagraph, TtsProgress } from '../lib/messaging';
-import { chunkByLength, splitIntoParagraphs } from '../lib/chunkText';
+import { splitIntoParagraphs } from '../lib/chunkText';
 import * as audioCache from '../lib/audioCache';
-
-type QueueItem = {
-  paragraphIndex: number;
-  chunks: string[];
-};
+import { createQueueItem, QueueItem } from '../lib/ttsQueue';
 
 type TabQueue = {
   requestId: string;
@@ -226,6 +222,7 @@ async function produceAudioForTab(tabId: number) {
             paragraphIndex: absoluteParagraphIndex,
             chunkIndex: j,
             totalChunks: item.chunks.length,
+            wordOffset: item.wordOffsets[j] ?? 0,
             audio: audioArray,
             text: item.chunks[j]
           });
@@ -277,10 +274,7 @@ function handleTtsRequest(msg: TtsRequest, sender: chrome.runtime.MessageSender)
     const pitch = msg.pitch || defaults.pitch;
     const paragraphs = msg.textBlocks.flatMap(p => splitIntoParagraphs(p));
     console.log('[TTS][bg] nova requisição', { tabId, paragraphs: paragraphs.length, voiceName, rate, pitch });
-    const items: QueueItem[] = paragraphs.map((p) => ({
-      paragraphIndex: 0,
-      chunks: chunkByLength(p, 1000)
-    }));
+    const items = paragraphs.map((p, idx) => createQueueItem(p, idx));
     tabIdToQueue.set(tabId, {
       requestId: msg.requestId,
       items,
@@ -356,10 +350,7 @@ function handleTtsPlayParagraph(msg: TtsPlayParagraph, sender: chrome.runtime.Me
   });
   
   // Processar os textBlocks diretamente (já vêm separados por parágrafo)
-  const items: QueueItem[] = msg.textBlocks.map((text, idx) => ({
-    paragraphIndex: msg.paragraphIndex + idx,
-    chunks: chunkByLength(text, 1000)
-  }));
+  const items = msg.textBlocks.map((text, idx) => createQueueItem(text, msg.paragraphIndex + idx));
   
   tabIdToQueue.set(tabId, {
     requestId: msg.requestId,

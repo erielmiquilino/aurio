@@ -126,13 +126,30 @@ type Candidate = { el: HTMLElement; norm: string };
 
 function collectCandidates(): Candidate[] {
   const scopeSelectors = [
-    'article', 'main', '[role="main"]', '.article', '.post', '.entry-content', '#content', '.content'
+    'article',
+    'main',
+    '[role="main"]',
+    '.center article',
+    '.center',
+    '.article',
+    '.post',
+    '.entry-content',
+    '#content',
+    '.content'
   ];
-  let scope: Element | Document = document;
   for (const sel of scopeSelectors) {
-    const candidate = document.querySelector(sel);
-    if (candidate) { scope = candidate; break; }
+    let bestForSelector: Candidate[] = [];
+    const scopes = Array.from(document.querySelectorAll(sel));
+    for (const scope of scopes) {
+      const candidates = collectCandidatesFromScope(scope);
+      if (candidates.length > bestForSelector.length) bestForSelector = candidates;
+    }
+    if (bestForSelector.length > 0) return bestForSelector;
   }
+  return collectCandidatesFromScope(document);
+}
+
+function collectCandidatesFromScope(scope: Element | Document): Candidate[] {
   const nodeList = (scope as Element | Document).querySelectorAll?.('p, h1, h2, h3, h4, h5, h6, li');
   const list: Candidate[] = [];
   if (!nodeList) return list;
@@ -408,10 +425,10 @@ function ensureStyleInjected() {
   style.textContent = `
 .tts-paragraph-button{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-right:8px;background:var(--accent-color,#1976d2);border:none;border-radius:50%;cursor:pointer;opacity:.7;transition:opacity .2s,transform .1s;vertical-align:middle;font-size:14px;padding:0;position:relative;top:-2px}
 .tts-paragraph-button:hover{opacity:1;transform:scale(1.1)}
-.tts-reading{outline: 3px solid rgba(25,118,210,.35);outline-offset: 2px;border-radius:4px}
-@media (prefers-color-scheme: dark){.tts-reading{outline: 3px solid rgba(100,181,246,.35)}}
+.tts-reading{outline: 3px solid rgba(25,118,210,.45)!important;outline-offset: 2px!important;border-radius:4px!important}
+@media (prefers-color-scheme: dark){.tts-reading{outline: 3px solid rgba(100,181,246,.45)!important}}
 .tts-word{transition:background-color .08s,color .08s}
-.tts-word-reading{background:var(--accent-color,#1976d2);color:#fff;border-radius:3px;padding:0 2px}
+.tts-word-reading{background:var(--accent-color,#1976d2)!important;color:#fff!important;border-radius:3px!important;padding:0 2px!important;box-decoration-break:clone;-webkit-box-decoration-break:clone}
 `;
   document.head.appendChild(style);
   console.log('[TTS][highlighter] estilos injetados');

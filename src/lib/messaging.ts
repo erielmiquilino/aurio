@@ -28,6 +28,7 @@ export type TtsAudioChunk = {
   requestId: string;
   chunkIndex: number;
   totalChunks: number;
+  wordOffset?: number;
   audio: ArrayBuffer;
   paragraphIndex?: number;
   text?: string;

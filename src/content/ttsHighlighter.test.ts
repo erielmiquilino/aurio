@@ -96,6 +96,34 @@ describe('ttsHighlighter', () => {
     expect(isActive()).toBe(true);
   });
 
+  it('maps against the richest content scope instead of a sparse first article', () => {
+    const quartzHtml = `
+      <article class="popover-hint"><p>Dica curta fora do conteudo.</p></article>
+      <main class="center">
+        <article class="popover-hint">
+          <h1>NDD Frete</h1>
+          <p>Conteudo principal da documentacao do produto.</p>
+          <p>Segundo paragrafo importante para leitura.</p>
+        </article>
+      </main>
+    `;
+    document.body.innerHTML = quartzHtml;
+
+    initHighlighter(`
+      <article>
+        <h1>NDD Frete</h1>
+        <p>Conteudo principal da documentacao do produto.</p>
+        <p>Segundo paragrafo importante para leitura.</p>
+      </article>
+    `);
+
+    const mapped = document.querySelectorAll('[data-tts-paragraph-index]');
+
+    expect(mapped).toHaveLength(3);
+    expect(document.querySelector('main h1')?.getAttribute('data-tts-paragraph-index')).toBe('0');
+    expect(document.querySelector('body > article p')?.getAttribute('data-tts-paragraph-index')).toBeNull();
+  });
+
   it('applies and clears paragraph highlighting classes', () => {
     document.body.innerHTML = articleHtml();
     initHighlighter(articleHtml());

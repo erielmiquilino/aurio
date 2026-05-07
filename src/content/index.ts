@@ -1,11 +1,18 @@
 import type { ReadPdf, TtsAudioChunk, TtsRequest } from '../lib/messaging';
-import { extractText, extractHtmlWithReadability } from '../lib/readability';
+import { extractText, extractHtmlWithReadability, extractBestContentScopeHtml, isUsefulArticleHtml } from '../lib/readability';
 import * as ttsHighlighter from './ttsHighlighter';
 
 let audioEl: HTMLAudioElement | null = null;
 let sourceUrl: string | null = null;
 let playingRequestId: string | null = null;
-type AudioQueueItem = { buf: ArrayBuffer; paragraphIndex: number | null; chunkIndex: number; totalChunks: number };
+type AudioQueueItem = {
+  buf: ArrayBuffer;
+  paragraphIndex: number | null;
+  chunkIndex: number;
+  totalChunks: number;
+  wordOffset: number;
+  text: string;
+};
 let queue: AudioQueueItem[] = [];
 let isPlaying = false;
 let isPaused = false;
@@ -128,25 +135,25 @@ let currentSyncChunkId = 0;
 function startWordSync(paragraphIndex: number, item: AudioQueueItem) {
   if (!audioEl) return;
   // Se não tiver texto do chunk, aborta; usaremos apenas highlight por parágrafo
-  const text = (item as any).text as string | undefined;
+  const text = item.text;
   if (!text) return;
   // Garantir wrap de palavras do parágrafo
   try { (ttsHighlighter as any).ensureWordWrap(paragraphIndex); } catch (_) { /* ignore */ }
+  try { (ttsHighlighter as any).highlightParagraph(paragraphIndex); } catch (_) { /* ignore */ }
   // Realçar a primeira palavra imediatamente para dar feedback
-  try { (ttsHighlighter as any).highlightWord(paragraphIndex, 0); } catch (_) { /* ignore */ }
+  try { (ttsHighlighter as any).highlightWord(paragraphIndex, item.wordOffset); } catch (_) { /* ignore */ }
   const { words, cumulative } = tokenizeWords(text);
   const duration = Math.max(audioEl.duration || 0, 0.001);
-  const chunkIndex = item.chunkIndex;
-  const totalChunks = item.totalChunks;
+  const syncLeadSeconds = Math.min(0.35, duration * 0.12);
   // Estimativa linear: posição do áudio dentro do chunk controla palavra
   const tick = () => {
     if (!audioEl) return;
     if (audioEl.paused) { wordSyncRaf = requestAnimationFrame(tick); return; }
-    const rel = Math.min(Math.max(audioEl.currentTime / duration, 0), 1);
+    const rel = Math.min(Math.max((audioEl.currentTime + syncLeadSeconds) / duration, 0), 1);
     const charPos = Math.floor(rel * (cumulative[cumulative.length - 1] || 1));
     let wordIdx = cumulative.findIndex(c => c > charPos);
     if (wordIdx < 0) wordIdx = Math.max(0, words.length - 1);
-    try { (ttsHighlighter as any).highlightWord(paragraphIndex, wordIdx); } catch (_) { /* ignore */ }
+    try { (ttsHighlighter as any).highlightWord(paragraphIndex, item.wordOffset + wordIdx); } catch (_) { /* ignore */ }
     wordSyncRaf = requestAnimationFrame(tick);
   };
   if (wordSyncRaf) cancelAnimationFrame(wordSyncRaf);
@@ -217,7 +224,7 @@ chrome.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (
       paragraphIndex: typeof m.paragraphIndex === 'number' ? m.paragraphIndex : null,
       chunkIndex: typeof m.chunkIndex === 'number' ? m.chunkIndex : -1,
       totalChunks: typeof m.totalChunks === 'number' ? m.totalChunks : -1,
-      // @ts-ignore - armazenar texto do chunk para sincronização aproximada
+      wordOffset: typeof m.wordOffset === 'number' ? m.wordOffset : 0,
       text: typeof m.text === 'string' ? m.text : ''
     });
     console.log('[TTS][content] chunk adicionado à fila', { queueLen: queue.length, isPlaying, paragraphIndex: m.paragraphIndex, chunkIndex: m.chunkIndex });
@@ -293,13 +300,17 @@ export async function prepareSpeak(voiceName: string, rate: string, pitch: strin
     return;
   }
   let articleHtml = '';
+  const fallbackArticleHtml = extractBestContentScopeHtml();
   if (useReadability) {
     const html = extractHtmlWithReadability();
-    if (html) articleHtml = html;
+    if (html && isUsefulArticleHtml(html, fallbackArticleHtml)) {
+      articleHtml = html;
+    } else if (html) {
+      console.warn('[TTS][content] extração Readability curta, usando DOM da página');
+    }
   }
   if (!articleHtml) {
-    // Fallback: usar body inteiro (mapeamento filtra pelo DOM principal)
-    articleHtml = document.body?.innerHTML || '';
+    articleHtml = fallbackArticleHtml;
   }
   console.log('[TTS][content] preparando mapeamento', { htmlLen: articleHtml.length, useReadability });
   ttsHighlighter.initHighlighter(articleHtml);
