@@ -3,8 +3,13 @@ declare module '*?worker&url' {
   export default url;
 }
 
-// Minimal chrome type surface for TS without global types
-// You can replace by installing @types/chrome if desired
-declare const chrome: any;
+interface Window {
+  requestSpeak?: (voiceName?: string, rate?: string, pitch?: string) => void;
+  prepareSpeak?: (voiceName?: string, rate?: string, pitch?: string, mapOnly?: boolean) => void;
+  readPdf?: (voiceName?: string, rate?: string, pitch?: string) => void;
+  pauseSpeak?: () => void;
+  resumeSpeak?: () => void;
+  stopSpeak?: () => void;
+}
 
 

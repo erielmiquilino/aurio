@@ -21,12 +21,24 @@ type TabQueue = {
 
 const tabIdToQueue = new Map<number, TabQueue>();
 
+function resolveMessageTabId(msg: { tabId?: number }, sender: chrome.runtime.MessageSender) {
+  return sender.tab?.id ?? msg.tabId;
+}
+
+function isCurrentQueue(tabId: number, queue: TabQueue) {
+  return tabIdToQueue.get(tabId) === queue;
+}
+
+function canContinueQueue(tabId: number, queue: TabQueue) {
+  return queue.playing && isCurrentQueue(tabId, queue);
+}
+
 // Contador de caracteres
 let sessionChars = 0;
 
 async function incrementCharCount(chars: number) {
   sessionChars += chars;
-  const result = await chrome.storage.local.get(['totalChars']);
+  const result = await chrome.storage.local.get(['totalChars']) as { totalChars?: number };
   const totalChars = (result.totalChars || 0) + chars;
   await chrome.storage.local.set({ totalChars });
   console.log('[TTS][bg] chars sintetizados', { added: chars, session: sessionChars, total: totalChars });
@@ -51,7 +63,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        // @ts-ignore
         window.requestSpeak?.(undefined, undefined, undefined);
       }
     });
@@ -60,7 +71,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        // @ts-ignore
         window.prepareSpeak?.(undefined, undefined, undefined, true);
       }
     });
@@ -69,7 +79,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        // @ts-ignore
         window.readPdf?.(undefined, undefined, undefined);
       }
     });
@@ -81,17 +90,17 @@ chrome.commands?.onCommand.addListener(async (command) => {
   if (!tab?.id) return;
   const tabId = tab.id;
   if (command === 'pause') {
-    await chrome.scripting.executeScript({ target: { tabId }, func: () => { /* @ts-ignore */ window.pauseSpeak?.(); } });
+    await chrome.scripting.executeScript({ target: { tabId }, func: () => { window.pauseSpeak?.(); } });
   } else if (command === 'resume') {
-    await chrome.scripting.executeScript({ target: { tabId }, func: () => { /* @ts-ignore */ window.resumeSpeak?.(); } });
+    await chrome.scripting.executeScript({ target: { tabId }, func: () => { window.resumeSpeak?.(); } });
   } else if (command === 'stop') {
-    await chrome.scripting.executeScript({ target: { tabId }, func: () => { /* @ts-ignore */ window.stopSpeak?.(); } });
+    await chrome.scripting.executeScript({ target: { tabId }, func: () => { window.stopSpeak?.(); } });
   }
 });
 
 async function getCredentials(): Promise<AzureCredentials | null> {
   return new Promise(resolve => {
-    chrome.storage.local.get(['azureRegion', 'azureKey'], (res) => {
+    chrome.storage.local.get(['azureRegion', 'azureKey'], (res: { azureRegion?: string; azureKey?: string }) => {
       if (res.azureRegion && res.azureKey) {
         console.log('[TTS][bg] credenciais carregadas', res.azureRegion);
         resolve({ region: res.azureRegion, key: res.azureKey });
@@ -105,7 +114,7 @@ async function getCredentials(): Promise<AzureCredentials | null> {
 
 async function getDefaults(): Promise<{ voice: string; rate: string; pitch: string }> {
   return new Promise(resolve => {
-    chrome.storage.local.get(['defaultVoice', 'defaultRate', 'defaultPitch'], (res) => {
+    chrome.storage.local.get(['defaultVoice', 'defaultRate', 'defaultPitch'], (res: { defaultVoice?: string; defaultRate?: string; defaultPitch?: string }) => {
       const voice = res.defaultVoice || 'pt-BR-FranciscaNeural';
       const rate = res.defaultRate || '0%';
       const pitch = res.defaultPitch || '+0Hz';
@@ -143,6 +152,7 @@ async function produceAudioForTab(tabId: number) {
   const queue = tabIdToQueue.get(tabId);
   if (!queue) return;
   const creds = await getCredentials();
+  if (!isCurrentQueue(tabId, queue)) return;
   if (!creds) {
     console.error('[TTS][bg] sintetizar sem credenciais');
     chrome.tabs.sendMessage(tabId, { type: 'TTS_ERROR', message: 'Credenciais do Azure ausentes. Abra Options e salve região/chave.' });
@@ -151,20 +161,26 @@ async function produceAudioForTab(tabId: number) {
   queue.playing = true;
   updateBadge(tabId, 'playing');
   for (let i = 0; i < queue.items.length; i++) {
-    if (!queue.playing) break;
+    if (!canContinueQueue(tabId, queue)) break;
     const item = queue.items[i];
     const absoluteParagraphIndex = queue.startParagraphIndex + i;
     
     for (let j = 0; j < item.chunks.length; j++) {
       // Pause handling
-      while (queue.paused && queue.playing) {
+      while (queue.paused && canContinueQueue(tabId, queue)) {
         await new Promise(r => setTimeout(r, 150));
       }
-      if (!queue.playing) break;
+      if (!canContinueQueue(tabId, queue)) break;
       const ssml = buildSsml(item.chunks[j], queue.voiceName, queue.rate, queue.pitch);
+      const cacheKey: audioCache.AudioCacheKey = {
+        text: item.chunks[j],
+        voiceName: queue.voiceName,
+        rate: queue.rate,
+        pitch: queue.pitch
+      };
       try {
         // Tentar buscar no cache primeiro
-        const cachedAudio = await audioCache.get(item.chunks[j], queue.voiceName);
+        const cachedAudio = await audioCache.get(cacheKey);
         let data: ArrayBuffer;
         
         if (cachedAudio) {
@@ -177,8 +193,9 @@ async function produceAudioForTab(tabId: number) {
           console.log('[TTS][bg] áudio sintetizado OK', { tabId, paragraph: i, chunk: j, audioSize: data.byteLength, contentType: result.contentType });
           await incrementCharCount(item.chunks[j].length);
           // Salvar no cache
-          await audioCache.set(item.chunks[j], queue.voiceName, data);
+          await audioCache.set(cacheKey, data);
         }
+        if (!canContinueQueue(tabId, queue)) break;
         // Converter ArrayBuffer para Array de bytes para serialização via Chrome messaging
         const audioArray = Array.from(new Uint8Array(data));
         try {
@@ -198,12 +215,15 @@ async function produceAudioForTab(tabId: number) {
         await new Promise(r => setTimeout(r, 10));
       } catch (e) {
         console.error('[TTS][bg] erro na síntese', e);
-        chrome.tabs.sendMessage(tabId, { type: 'TTS_ERROR', message: String(e) });
-        queue.playing = false;
+        if (isCurrentQueue(tabId, queue)) {
+          chrome.tabs.sendMessage(tabId, { type: 'TTS_ERROR', message: String(e) });
+          queue.playing = false;
+        }
         break;
       }
     }
 
+    if (!canContinueQueue(tabId, queue)) break;
     chrome.tabs.sendMessage(tabId, {
       type: 'TTS_PROGRESS',
       requestId: queue.requestId,
@@ -211,12 +231,14 @@ async function produceAudioForTab(tabId: number) {
       totalParagraphs: queue.items.length
     });
   }
-  queue.playing = false;
-  updateBadge(tabId, 'stopped');
+  if (isCurrentQueue(tabId, queue)) {
+    queue.playing = false;
+    updateBadge(tabId, 'stopped');
+  }
 }
 
 function handleTtsRequest(msg: TtsRequest, sender: chrome.runtime.MessageSender) {
-  const tabId = sender.tab?.id ?? msg.tabId;
+  const tabId = resolveMessageTabId(msg, sender);
   if (tabId == null) {
     console.error('[TTS][bg] handleTtsRequest sem tabId');
     return;
@@ -246,35 +268,52 @@ function handleTtsRequest(msg: TtsRequest, sender: chrome.runtime.MessageSender)
   })();
 }
 
-function handleStop(msg: TtsStop) {
-  const q = tabIdToQueue.get(msg.tabId);
+function handleStop(msg: TtsStop, sender: chrome.runtime.MessageSender) {
+  const tabId = resolveMessageTabId(msg, sender);
+  if (tabId == null) {
+    console.error('[TTS][bg] handleStop sem tabId');
+    return;
+  }
+  const q = tabIdToQueue.get(tabId);
   if (q) {
     q.playing = false;
-    updateBadge(msg.tabId, 'stopped');
+    q.paused = false;
+    tabIdToQueue.delete(tabId);
+    updateBadge(tabId, 'stopped');
   }
-  console.log('[TTS][bg] stop', msg.tabId);
+  console.log('[TTS][bg] stop', tabId);
 }
 
-function handlePause(msg: TtsPause) {
-  const q = tabIdToQueue.get(msg.tabId);
+function handlePause(msg: TtsPause, sender: chrome.runtime.MessageSender) {
+  const tabId = resolveMessageTabId(msg, sender);
+  if (tabId == null) {
+    console.error('[TTS][bg] handlePause sem tabId');
+    return;
+  }
+  const q = tabIdToQueue.get(tabId);
   if (q) {
     q.paused = true;
-    updateBadge(msg.tabId, 'paused');
+    updateBadge(tabId, 'paused');
   }
-  console.log('[TTS][bg] pause', msg.tabId);
+  console.log('[TTS][bg] pause', tabId);
 }
 
-function handleResume(msg: TtsResume) {
-  const q = tabIdToQueue.get(msg.tabId);
+function handleResume(msg: TtsResume, sender: chrome.runtime.MessageSender) {
+  const tabId = resolveMessageTabId(msg, sender);
+  if (tabId == null) {
+    console.error('[TTS][bg] handleResume sem tabId');
+    return;
+  }
+  const q = tabIdToQueue.get(tabId);
   if (q) {
     q.paused = false;
-    updateBadge(msg.tabId, 'playing');
+    updateBadge(tabId, 'playing');
   }
-  console.log('[TTS][bg] resume', msg.tabId);
+  console.log('[TTS][bg] resume', tabId);
 }
 
 function handleTtsPlayParagraph(msg: TtsPlayParagraph, sender: chrome.runtime.MessageSender) {
-  const tabId = sender.tab?.id ?? msg.tabId;
+  const tabId = resolveMessageTabId(msg, sender);
   if (tabId == null) {
     console.error('[TTS][bg] handleTtsPlayParagraph sem tabId');
     return;
@@ -319,13 +358,13 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
       handleTtsPlayParagraph(message as TtsPlayParagraph, sender);
       break;
     case 'TTS_STOP':
-      handleStop(message as TtsStop);
+      handleStop(message as TtsStop, sender);
       break;
     case 'TTS_PAUSE':
-      handlePause(message as TtsPause);
+      handlePause(message as TtsPause, sender);
       break;
     case 'TTS_RESUME':
-      handleResume(message as TtsResume);
+      handleResume(message as TtsResume, sender);
       break;
     case 'READ_PDF':
       handleReadPdf(message as ReadPdf, sender);
@@ -334,7 +373,7 @@ chrome.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
       sendResponse({ sessionChars });
       return true;
     case 'GET_TOTAL_CHARS':
-      chrome.storage.local.get('totalChars', (res) => {
+      chrome.storage.local.get('totalChars', (res: { totalChars?: number }) => {
         sendResponse({ totalChars: res.totalChars ?? 0 });
       });
       return true;

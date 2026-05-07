@@ -86,7 +86,11 @@ function createPlayButton(index: number): HTMLButtonElement {
 
 async function handlePlayButtonClick(paragraphIndex: number) {
   console.log('[TTS][highlighter] botão clicado', { paragraphIndex });
-  const result = await chrome.storage.local.get(['defaultVoice', 'defaultRate', 'defaultPitch']);
+  const result = await chrome.storage.local.get(['defaultVoice', 'defaultRate', 'defaultPitch']) as {
+    defaultVoice?: string;
+    defaultRate?: string;
+    defaultPitch?: string;
+  };
   const voiceName = result.defaultVoice || 'pt-BR-FranciscaNeural';
   const rate = result.defaultRate || '0%';
   const pitch = result.defaultPitch || '+0Hz';

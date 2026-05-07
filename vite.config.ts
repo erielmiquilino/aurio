@@ -1,9 +1,6 @@
 import { defineConfig } from 'vite';
-// @ts-ignore
 import { resolve } from 'path';
-// @ts-ignore
-import { copyFile } from 'fs/promises';
-// @ts-ignore
+import { copyFile, mkdir } from 'fs/promises';
 import { fileURLToPath } from 'url';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
@@ -18,6 +15,7 @@ export default defineConfig(({ mode }) => {
         closeBundle: async () => {
           const src = resolve(rootDir, 'manifest.json');
           const dst = resolve(rootDir, 'dist/manifest.json');
+          await mkdir(resolve(rootDir, 'dist'), { recursive: true });
           try {
             await copyFile(src, dst);
           } catch (_) {

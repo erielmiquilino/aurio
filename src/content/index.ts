@@ -1,4 +1,4 @@
-import type { TtsAudioChunk, TtsRequest } from '../lib/messaging';
+import type { ReadPdf, TtsAudioChunk, TtsRequest } from '../lib/messaging';
 import { extractText, extractHtmlWithReadability } from '../lib/readability';
 import * as ttsHighlighter from './ttsHighlighter';
 
@@ -312,8 +312,18 @@ export function resumeSpeak() {
   }
 }
 
-export function readPdf(voiceName: string, rate: string, pitch: string) {
-  console.warn('[TTS][content] Leitura de PDF está temporariamente desativada.');
+export function readPdf(voiceName = '', rate = '', pitch = '') {
+  const req: ReadPdf = {
+    type: 'READ_PDF',
+    voiceName,
+    rate,
+    pitch
+  };
+
+  console.log('[TTS][content] solicitando leitura de PDF', { voiceName, rate, pitch });
+  chrome.runtime.sendMessage(req).catch(err => {
+    console.error('[TTS][content] erro ao solicitar READ_PDF', err);
+  });
 }
 
 // Expor no window para chamadas via scripting

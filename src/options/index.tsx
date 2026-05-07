@@ -12,7 +12,14 @@ function Options() {
   const [cacheSize, setCacheSize] = useState(0);
 
   useEffect(() => {
-    chrome.storage.local.get(['azureRegion', 'azureKey', 'defaultVoice', 'defaultRate', 'defaultPitch', 'totalChars'], (res) => {
+    chrome.storage.local.get(['azureRegion', 'azureKey', 'defaultVoice', 'defaultRate', 'defaultPitch', 'totalChars'], (res: {
+      azureRegion?: string;
+      azureKey?: string;
+      defaultVoice?: string;
+      defaultRate?: string;
+      defaultPitch?: string;
+      totalChars?: number;
+    }) => {
       if (res.azureRegion) setRegion(res.azureRegion);
       if (res.azureKey) setKey(res.azureKey);
       if (res.defaultVoice) setVoice(res.defaultVoice);

@@ -12,6 +12,14 @@ type CacheEntry = {
   hits: number;
 };
 
+export type AudioCacheKey = {
+  text: string;
+  voiceName: string;
+  rate: string;
+  pitch: string;
+  outputFormat?: string;
+};
+
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDB(): Promise<IDBDatabase> {
@@ -42,9 +50,11 @@ function openDB(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-function generateKey(text: string, voiceName: string): string {
+const DEFAULT_OUTPUT_FORMAT = 'audio-24khz-96kbitrate-mono-mp3';
+
+function generateKey({ text, voiceName, rate, pitch, outputFormat = DEFAULT_OUTPUT_FORMAT }: AudioCacheKey): string {
   // Simples hash para evitar chaves muito longas
-  const combined = `${text}__${voiceName}`;
+  const combined = JSON.stringify({ text, voiceName, rate, pitch, outputFormat });
   let hash = 0;
   for (let i = 0; i < combined.length; i++) {
     const char = combined.charCodeAt(i);
@@ -54,10 +64,10 @@ function generateKey(text: string, voiceName: string): string {
   return `${hash}_${combined.length}`;
 }
 
-export async function get(text: string, voiceName: string): Promise<ArrayBuffer | null> {
+export async function get(keyMaterial: AudioCacheKey): Promise<ArrayBuffer | null> {
   try {
     const db = await openDB();
-    const key = generateKey(text, voiceName);
+    const key = generateKey(keyMaterial);
     
     return new Promise((resolve) => {
       const transaction = db.transaction(STORE_NAME, 'readwrite');
@@ -101,10 +111,10 @@ export async function get(text: string, voiceName: string): Promise<ArrayBuffer 
   }
 }
 
-export async function set(text: string, voiceName: string, audio: ArrayBuffer): Promise<void> {
+export async function set(keyMaterial: AudioCacheKey, audio: ArrayBuffer): Promise<void> {
   try {
     const db = await openDB();
-    const key = generateKey(text, voiceName);
+    const key = generateKey(keyMaterial);
     
     // Verificar tamanho antes de adicionar
     const currentSize = await getSize();
