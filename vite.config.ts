@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import { copyFile, mkdir } from 'fs/promises';
 import { fileURLToPath } from 'url';
+import { build as esbuild } from 'esbuild';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -29,6 +30,25 @@ export default defineConfig(({ mode }) => {
             console.log('✓ pdf.worker.min.mjs copiado');
           } catch (e) {
             console.error('✗ Falha ao copiar pdf.worker.min.mjs', e);
+          }
+          // Content scripts não podem usar import/export no Chrome.
+          // O bundle principal do Vite pode gerar imports compartilhados; sobrescrever
+          // content.js com um IIFE autocontido evita "Cannot use import statement outside a module".
+          try {
+            await esbuild({
+              entryPoints: [resolve(rootDir, 'src/content/index.ts')],
+              bundle: true,
+              format: 'iife',
+              target: 'es2020',
+              outfile: resolve(rootDir, 'dist/content.js'),
+              sourcemap: isDev,
+              minify: !isDev,
+              logLevel: 'silent'
+            });
+            console.log('✓ content.js empacotado como script clássico');
+          } catch (e) {
+            console.error('✗ Falha ao empacotar content.js', e);
+            throw e;
           }
         }
       }
